@@ -576,15 +576,10 @@ sysrc "${DM_SERVICE}_enable=YES"
 log "Configurazione Audio e PulseAudio..."
 
 # 1. Carica driver audio nel Kernel (CRITICO)
-if sysrc -n kld_list >/dev/null 2>&1; then
-    current_kld=$(sysrc -n kld_list)
-    if ! echo "$current_kld" | grep -q "snd_driver"; then
-        sysrc kld_list="${current_kld} snd_driver"
-        log "OK: Aggiunto snd_driver a kld_list"
-    fi
-else
-    sysrc kld_list="snd_driver"
-    log "OK: Creato kld_list con snd_driver"
+current_kld=$(sysrc -n kld_list 2>/dev/null || echo "")
+if ! echo "$current_kld" | grep -q "snd_driver"; then
+    sysrc kld_list+="snd_driver"
+    log "OK: Aggiunto snd_driver a kld_list"
 fi
 
 # 2. Configurazione file PulseAudio
@@ -623,12 +618,7 @@ if [ -n "$GPU_KMOD" ]; then
     
     current=$(sysrc -n kld_list 2>/dev/null || echo "")
     if ! echo "$current" | grep -q "$GPU_KMOD"; then
-        # Aggiunge in coda, gestendo se la lista è vuota o meno
-        if [ -z "$current" ]; then
-            sysrc kld_list+="$GPU_KMOD"
-        else
-            sysrc kld_list+="${current} ${GPU_KMOD}"
-        fi
+        sysrc kld_list+="$GPU_KMOD"
         log "OK: Aggiunto $GPU_KMOD a kld_list"
     fi
 fi
