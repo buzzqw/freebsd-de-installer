@@ -25,16 +25,16 @@ install_pkg() {
     echo "=========================================="
     echo ""
     
-    # Esegui pkg install:
-    # 1. Mostra output a video E lo salva nel log (usando tee)
-    # 2. Cattura il codice di errore di pkg in un file temporaneo
+    # Execute pkg install:
+    # 1. Show output on screen AND save it to log (using tee)
+    # 2. Capture pkg error code in a temporary file
     (pkg install -y $pkgs 2>&1; echo $? > "$exitcode_file") | tee "$tmplog"
     
-    # Leggi il codice di uscita catturato
+    # Read the captured exit code
     local pkg_exit=$(cat "$exitcode_file")
     rm -f "$exitcode_file"
 
-    # Aggiungi il log temporaneo al log principale
+    # Append temporary log to main log
     cat "$tmplog" >> "$LOGFILE"
     rm -f "$tmplog"
 
@@ -344,7 +344,7 @@ case $gpu in
         GPU_KMOD="radeonkms"
         ;;
     NVIDIA)
-        # Chiedi quale versione NVIDIA
+        # Ask which NVIDIA version
         NV_VER=$($DIALOG --title "NVIDIA Driver" \
             --radiolist "Driver version:" 10 50 3 \
             "latest" "Latest version" on \
@@ -461,7 +461,7 @@ if echo "$EXTRA_APPS" | grep -q "libreoffice"; then
     EXTRA_APPS="$EXTRA_APPS cups cups-pdf"
 fi
 
-log "Pacchetti lingua: $PKG_LANG"
+log "Language packages: $PKG_LANG"
 
 
 # Desktop Environment
@@ -490,7 +490,7 @@ else
     APPS_LIST="  (None)"
 fi
 
-# Mostra riepilogo e chiedi conferma
+# Show summary and ask for confirmation
 $DIALOG --title "Confirm Installation" \
     --yesno "Configuration summary:\n\n\
 Desktop Environment: $DE_CHOICE\n\
@@ -568,22 +568,17 @@ sysrc dbus_enable=YES
 log "Configuring Display Manager: $DM_SERVICE"
 sysrc "${DM_SERVICE}_enable=YES"
 
-# --- CONFIGURAZIONE AUDIO CORRETTA ---
-log "Configurazione Audio e PulseAudio..."
+# --- CORRECT AUDIO CONFIGURATION ---
+log "Configuring Audio and PulseAudio..."
 
-# 1. Carica driver audio nel Kernel (CRITICO)
-if sysrc -n kld_list >/dev/null 2>&1; then
-    current_kld=$(sysrc -n kld_list)
-    if ! echo "$current_kld" | grep -q "snd_driver"; then
-        sysrc kld_list="${current_kld} snd_driver"
-        log "OK: Aggiunto snd_driver a kld_list"
-    fi
-else
-    sysrc kld_list="snd_driver"
-    log "OK: Creato kld_list con snd_driver"
+# 1. Load audio driver in Kernel (CRITICAL)
+current_kld=$(sysrc -n kld_list 2>/dev/null || echo "")
+if ! echo "$current_kld" | grep -q "snd_driver"; then
+    sysrc kld_list+="snd_driver"
+    log "OK: Added snd_driver to kld_list"
 fi
 
-# 2. Configurazione file PulseAudio
+# 2. PulseAudio configuration file
 PA_DIR="/usr/local/etc/pulse"
 PA_CONF="$PA_DIR/default.pa"
 PA_SAMPLE="$PA_DIR/default.pa.sample"
@@ -592,46 +587,41 @@ mkdir -p "$PA_DIR"
 
 if [ ! -f "$PA_CONF" ]; then
     if [ -f "$PA_SAMPLE" ]; then
-        log "Copia default.pa da template sample..."
+        log "Copying default.pa from sample template..."
         cp "$PA_SAMPLE" "$PA_CONF"
     else
-        log "ATTENZIONE: default.pa.sample non trovato!"
+        log "WARNING: default.pa.sample not found!"
     fi
 fi
 
 if [ -f "$PA_CONF" ]; then
-    # Abilita module-oss (cerca di decommentare se esiste, altrimenti appende)
+    # Enable module-oss (try to uncomment if it exists, otherwise append)
     if grep -q "#load-module module-oss" "$PA_CONF"; then
         sed -i '' 's/#load-module module-oss/load-module module-oss/' "$PA_CONF"
-        log "OK: Decommentato module-oss in default.pa"
+        log "OK: Uncommented module-oss in default.pa"
     elif ! grep -q "^load-module module-oss" "$PA_CONF"; then
         echo "load-module module-oss" >> "$PA_CONF"
-        log "OK: Aggiunto module-oss a default.pa"
+        log "OK: Added module-oss to default.pa"
     fi
 else
-    # Fallback estremo se il sample non esisteva
+    # Extreme fallback if sample didn't exist
     echo "load-module module-oss" > "$PA_CONF"
 fi
 
-# Configurazione GPU - KMOD (Esegue append sicuro)
+# Configuring GPU - KMOD (Secure append)
 if [ -n "$GPU_KMOD" ]; then
-    log "Configurazione driver video kernel module: $GPU_KMOD"
+    log "Configuration driver for video kernel module: $GPU_KMOD"
     
     current=$(sysrc -n kld_list 2>/dev/null || echo "")
     if ! echo "$current" | grep -q "$GPU_KMOD"; then
-        # Aggiunge in coda, gestendo se la lista è vuota o meno
-        if [ -z "$current" ]; then
-            sysrc kld_list+="$GPU_KMOD"
-        else
-            sysrc kld_list+="${current} ${GPU_KMOD}"
-        fi
-        log "OK: Aggiunto $GPU_KMOD a kld_list"
+        sysrc kld_list+="$GPU_KMOD"
+        log "OK: Added $GPU_KMOD a kld_list"
     fi
 fi
 
-# Configurazione GPU - LOADER.CONF
+# GPU Configuration - LOADER.CONF
 if [ -n "$GPU_LOADER" ]; then
-    log "Configurazione loader.conf: $GPU_LOADER"
+    log "Configuring loader.conf: $GPU_LOADER"
     if ! grep -q "hw.nvidiadrm.modeset" /boot/loader.conf 2>/dev/null; then
         echo "$GPU_LOADER" >> /boot/loader.conf
         log "OK: Added to /boot/loader.conf"
@@ -713,9 +703,9 @@ EOF
     fi
 fi
 
-# Configurazione Stampante (CUPS)
+# Printer Configuration (CUPS)
 if echo "$EXTRA_APPS" | grep -q "cups"; then
-    log "Configurazione servizio stampa (CUPS)..."
+    log "Configuring printing service (CUPS)..."
     sysrc cupsd_enable=YES
 fi
 
@@ -785,7 +775,7 @@ if [ -n "$SELECTED_USERS" ]; then
         SUDO_STATUS="Disabled"
     fi
     
-    # Configurazione per utente
+    # Per-user configuration
     for user in $SELECTED_USERS; do
         user_home=$(pw usershow "$user" | awk -F: '{print $(NF-1)}')
         log "Configuring user: $user (home: $user_home)"
@@ -794,7 +784,7 @@ if [ -n "$SELECTED_USERS" ]; then
             touch "${user_home}/.profile"
         fi
         
-        # Locale utente
+        # User locale
         if ! grep -q "export LANG=" "${user_home}/.profile" 2>/dev/null; then
             cat >> "${user_home}/.profile" <<EOF
 
@@ -853,7 +843,7 @@ EOF
             chown -R "${user}:${user}" "${user_config}"
         fi
         
-        # Configurazione tastiera XFCE
+        # XFCE keyboard configuration
         if [ "$DE_CHOICE" = "XFCE" ]; then
             log "Configuring XFCE keyboard for $user (layout: $KB_LAYOUT + us)..."
             
@@ -861,7 +851,7 @@ EOF
             xfce_kb_dir="${user_config}/xfce4/xfconf/xfce-perchannel-xml"
             mkdir -p "${xfce_kb_dir}"
             
-            # Layout: primario + us (se primario non è già us)
+            # Layout: primary + us (if primary is not already us)
             if [ "$KB_LAYOUT" = "us" ]; then
                 KB_LAYOUTS="us"
                 KB_VARIANTS=""
@@ -870,7 +860,7 @@ EOF
                 KB_VARIANTS=","
             fi
             
-            # Crea/aggiorna configurazione tastiera
+            # Create/update keyboard configuration
             cat > "${xfce_kb_dir}/keyboard-layout.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 
@@ -887,21 +877,21 @@ EOF
             log "OK: Keyboard .* configured for $user"
         fi
         
-        # Configurazione tastiera KDE
+        # KDE keyboard configuration
         if [ "$DE_CHOICE" = "KDE" ]; then
             log "Configuring KDE keyboard for $user (layout: $KB_LAYOUT + us)..."
             
             user_config="${user_home}/.config"
             mkdir -p "${user_config}"
             
-            # Layout: primario + us (se primario non è già us)
+            # Layout: primary + us (if primary is not already us)
             if [ "$KB_LAYOUT" = "us" ]; then
                 KDE_LAYOUTS="us"
             else
                 KDE_LAYOUTS="${KB_LAYOUT},us"
             fi
             
-            # KDE Plasma 5/6 usa kxkbrc
+            # KDE Plasma 5/6 uses kxkbrc
             cat > "${user_config}/kxkbrc" <<EOF
 [Layout]
 DisplayNames=
@@ -922,21 +912,21 @@ EOF
             log "OK: Keyboard .* configured for $user"
         fi
         
-        # Configurazione tastiera GNOME
+        # GNOME keyboard configuration
         if [ "$DE_CHOICE" = "GNOME" ]; then
             log "Configuring GNOME keyboard for $user (layout: $KB_LAYOUT + us)..."
             
             user_config="${user_home}/.config"
             mkdir -p "${user_config}/autostart"
             
-            # Layout: primario + us (se primario non è già us)
+            # Layout: primary + us (if primary is not already us)
             if [ "$KB_LAYOUT" = "us" ]; then
                 GNOME_LAYOUTS="[('xkb', 'us')]"
             else
                 GNOME_LAYOUTS="[('xkb', '${KB_LAYOUT}'), ('xkb', 'us')]"
             fi
             
-            # Script per configurare tastiera al login (GNOME usa gsettings)
+            # Script to configure keyboard at login (GNOME uses gsettings)
             cat > "${user_config}/autostart/set-keyboard.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -954,12 +944,12 @@ EOF
         # LibreOffice language configuration
         if echo "$EXTRA_APPS" | grep -q "libreoffice"; then
             if [ "$LANG_CODE" != "en" ]; then
-                log "Configuring LibreOffice for $user (lingua: $LANG_CODE)..."
+                log "Configuring LibreOffice for $user (language: $LANG_CODE)..."
                 
                 lo_config="${user_home}/.config/libreoffice/4/user"
                 mkdir -p "${lo_config}"
                 
-                # registrymodifications.xcu per impostare lingua UI e locale
+                # registrymodifications.xcu to set UI language and locale
                 cat > "${lo_config}/registrymodifications.xcu" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -979,9 +969,9 @@ fi
 
 # --- 12. FINAL VERIFICATION ---
 
-log "=== Verifying installation...="
+log "=== Verifying installation ==="
 
-# Verifica driver video installed
+# Verify video driver installed
 if [ -n "$GPU_PKGS" ]; then
     for pkg in $GPU_PKGS; do
         if pkg info "$pkg" >/dev/null 2>&1; then
@@ -992,33 +982,33 @@ if [ -n "$GPU_PKGS" ]; then
     done
 fi
 
-# Verifica display manager
+# Verify display manager
 if pkg info "$DM_SERVICE" >/dev/null 2>&1; then
     log "✓ Display manager $DM_SERVICE installed"
 else
     log "✗ MISSING: Display manager $DM_SERVICE"
 fi
 
-# Verifica kld_list
+# Verify kld_list
 if sysrc -n kld_list >/dev/null 2>&1; then
     log "✓ kld_list configured: $(sysrc -n kld_list)"
 else
     log "✗ WARNING: kld_list not configured"
 fi
 
-# Verifying critical services...ilitati
+# Verifying critical services
 log "Verifying critical services..."
 SERVICES_OK=true
 for svc in dbus ${DM_SERVICE}; do
     if sysrc -n ${svc}_enable 2>/dev/null | grep -q YES; then
-        log "✓ Service .* enabled"
+        log "✓ Service $svc enabled"
     else
-        log "✗ ATTENZIONE: Service .* enabled"
+        log "✗ WARNING: Service $svc not enabled"
         SERVICES_OK=false
     fi
 done
 
-# Verifica PulseAudio daemon
+# Verify PulseAudio daemon
 if sysrc -n snd_driver 2>/dev/null | grep -q "snd_driver"; then
     log "✓ Audio driver (snd_driver) configured"
 else
@@ -1029,14 +1019,14 @@ if [ "$SERVICES_OK" = "false" ]; then
     log "⚠ Some critical services are not enabled properly"
 fi
 
-log "=== Installation completed...="
+log "=== Installation completed ==="
 
 # --- 13. COMPLETION ---
 
 clear
 cat <<EOF
 ===================================================
-    FreeBSD Desktop Installation Completata!
+    FreeBSD Desktop Installation Completed!
 ===================================================
 
 Desktop Environment: $DE_CHOICE
@@ -1075,7 +1065,7 @@ Complete log: $LOGFILE
 
 EOF
 
-# Mostra log se ci sono errori
+# Show log if there are errors
 if grep -q "ERRORE" "$LOGFILE"; then
     $DIALOG --title "Warning" \
         --yesno "Some errors detected during installation.\n\nView log?" 0 0
@@ -1086,8 +1076,8 @@ if grep -q "ERRORE" "$LOGFILE"; then
     fi
 fi
 
-# Chiedi se riavviare
-$DIALOG --title "Installazione Completata" \
+# Ask if reboot
+$DIALOG --title "Installation Completed" \
     --yesno "Reboot system now?" 0 0
 
 if [ $? -eq $BSDDIALOG_YES ]; then
