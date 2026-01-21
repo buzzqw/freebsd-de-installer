@@ -621,9 +621,9 @@ if [ -n "$GPU_KMOD" ]; then
     if ! echo "$current" | grep -q "$GPU_KMOD"; then
         # Aggiunge in coda, gestendo se la lista è vuota o meno
         if [ -z "$current" ]; then
-            sysrc kld_list="$GPU_KMOD"
+            sysrc kld_list+="$GPU_KMOD"
         else
-            sysrc kld_list="${current} ${GPU_KMOD}"
+            sysrc kld_list+="${current} ${GPU_KMOD}"
         fi
         log "OK: Aggiunto $GPU_KMOD a kld_list"
     fi
