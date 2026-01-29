@@ -58,6 +58,53 @@ install_pkg() {
     fi
 }
 
+# Virtual Machine detection function
+detect_vm_type() {
+    # Check sysctl
+    local vm_guest=$(sysctl -n kern.vm_guest 2>/dev/null)
+    if [ -n "$vm_guest" ] && [ "$vm_guest" != "none" ]; then
+        echo "$vm_guest"
+        return 0
+    fi
+    
+    # Check dmesg for hypervisor
+    if dmesg | grep -qi "Hypervisor: Origin.*KVMKVMKVM"; then
+        echo "kvm"
+        return 0
+    elif dmesg | grep -qi "Hypervisor: Origin.*Microsoft Hv"; then
+        echo "hyperv"
+        return 0
+    elif dmesg | grep -qi "Hypervisor: Origin.*VMwareVMware"; then
+        echo "vmware"
+        return 0
+    elif dmesg | grep -qi "Hypervisor: Origin.*XenVMMXenVMM"; then
+        echo "xen"
+        return 0
+    fi
+    
+    # Additional QEMU/KVM detection methods
+    if dmesg | grep -qiE "QEMU|virtio"; then
+        echo "kvm"
+        return 0
+    fi
+    
+    # Check hw.model
+    if sysctl -n hw.model 2>/dev/null | grep -qi "qemu"; then
+        echo "kvm"
+        return 0
+    fi
+    
+    # Check for virtio devices
+    if pciconf -lv 2>/dev/null | grep -qi "virtio"; then
+        echo "kvm"
+        return 0
+    fi
+    
+    # Fallback to none
+    echo "none"
+    return 1
+}
+
 
 # --- 1. PRELIMINARY CHECKS ---
 
@@ -196,9 +243,47 @@ log "Storage: $([ "$HAS_SSD" = "YES" ] && echo "SSD" || echo "HDD")"
 
 # GPU detection
 VGA_INFO=$(pciconf -lv | grep -A 4 vga)
+PCI_FULL=$(pciconf -lv)
 AUTO_GPU="Generic"
+VM_TYPE=$(detect_vm_type)
 
-if echo "$VGA_INFO" | grep -qi "intel"; then
+log "VM Type detected: $VM_TYPE"
+
+# Priority 1: Check for virtualization-specific GPUs first
+if echo "$VGA_INFO" | grep -qi "qxl"; then
+    AUTO_GPU="QEMU"
+    log "Detected QXL video device"
+elif echo "$VGA_INFO" | grep -qi "virtio"; then
+    AUTO_GPU="QEMU"
+    log "Detected VirtIO GPU"
+elif echo "$VGA_INFO" | grep -q "vendor.*0x1234"; then
+    # QEMU standard VGA (vendor ID 0x1234, device 0x1111)
+    AUTO_GPU="QEMU"
+    log "Detected QEMU standard VGA (vendor 0x1234)"
+elif echo "$PCI_FULL" | grep -qi "qxl"; then
+    AUTO_GPU="QEMU"
+    log "Detected QXL device in PCI"
+elif echo "$PCI_FULL" | grep -qi "virtio.*display\|virtio.*vga\|virtio.*gpu"; then
+    AUTO_GPU="QEMU"
+    log "Detected VirtIO display device"
+elif echo "$VGA_INFO" | grep -qi "vmware"; then
+    AUTO_GPU="VMware"
+elif echo "$VGA_INFO" | grep -qi "virtualbox"; then
+    AUTO_GPU="VirtualBox"
+elif echo "$VGA_INFO" | grep -qi "hyperv\|hyper-v"; then
+    AUTO_GPU="HyperV"
+# Priority 2: If VM detected but no specific GPU, match by VM type
+elif [ "$VM_TYPE" = "kvm" ] || [ "$VM_TYPE" = "qemu" ]; then
+    AUTO_GPU="QEMU"
+    log "QEMU/KVM detected via VM type, using QEMU driver"
+elif [ "$VM_TYPE" = "hyperv" ]; then
+    AUTO_GPU="HyperV"
+    log "Hyper-V detected via VM type"
+elif [ "$VM_TYPE" = "vmware" ]; then
+    AUTO_GPU="VMware"
+    log "VMware detected via VM type"
+# Priority 3: Physical hardware GPUs
+elif echo "$VGA_INFO" | grep -qi "intel"; then
     AUTO_GPU="Intel"
 elif echo "$VGA_INFO" | grep -qi "nvidia"; then
     AUTO_GPU="NVIDIA"
@@ -208,10 +293,6 @@ elif echo "$VGA_INFO" | grep -qi "amd\|ati\|radeon"; then
     else
         AUTO_GPU="Radeon"
     fi
-elif echo "$VGA_INFO" | grep -qi "vmware"; then
-    AUTO_GPU="VMware"
-elif echo "$VGA_INFO" | grep -qi "virtualbox"; then
-    AUTO_GPU="VirtualBox"
 fi
 
 log "GPU detected: $AUTO_GPU"
@@ -248,16 +329,16 @@ log "Desktop selected: $DE_CHOICE"
 
 LOCALE_CHOICE=$($DIALOG --title "Desktop Language" \
     --radiolist "Select language:" 18 50 10 \
-    "it_IT.UTF-8" "Italiano" on \
+    "it_IT.UTF-8" "Italian" on \
     "en_US.UTF-8" "English (US)" off \
     "en_GB.UTF-8" "English (UK)" off \
-    "de_DE.UTF-8" "Deutsch" off \
-    "fr_FR.UTF-8" "Français" off \
-    "es_ES.UTF-8" "Español" off \
-    "pt_BR.UTF-8" "Português" off \
-    "ru_RU.UTF-8" "Русский" off \
-    "ja_JP.UTF-8" "日本語" off \
-    "zh_CN.UTF-8" "中文" off \
+    "de_DE.UTF-8" "German" off \
+    "fr_FR.UTF-8" "French" off \
+    "es_ES.UTF-8" "Spanish" off \
+    "pt_BR.UTF-8" "Portuguese" off \
+    "ru_RU.UTF-8" "Russian" off \
+    "ja_JP.UTF-8" "Japanese" off \
+    "zh_CN.UTF-8" "Chinese" off \
     3>&1 1>&2 2>&3 3>&-)
 
 [ $? -ne $BSDDIALOG_OK ] && exit 1
@@ -266,7 +347,7 @@ LOCALE_CHOICE=$($DIALOG --title "Desktop Language" \
 LANG_CODE=$(echo "$LOCALE_CHOICE" | cut -d'_' -f1)
 log "Language selected: $LOCALE_CHOICE"
 
-# Mappatura lingua -> layout tastiera
+# Language -> keyboard layout mapping
 case $LANG_CODE in
     it) KB_LAYOUT="it" ;;
     de) KB_LAYOUT="de" ;;
@@ -277,7 +358,7 @@ case $LANG_CODE in
     ja) KB_LAYOUT="jp" ;;
     zh) KB_LAYOUT="cn" ;;
     en)
-        # Distingui US/UK
+        # Distinguish US/UK
         case $LOCALE_CHOICE in
             en_GB*) KB_LAYOUT="gb" ;;
             *) KB_LAYOUT="us" ;;
@@ -290,7 +371,7 @@ log "Keyboard layout: $KB_LAYOUT"
 
 # --- 5. VIDEO DRIVER SELECTION ---
 
-# Imposta suggerimento
+# Set suggestion
 case $AUTO_GPU in
     Intel) D_INTEL="on" ;;
     AMD) D_AMD="on" ;;
@@ -298,6 +379,8 @@ case $AUTO_GPU in
     NVIDIA) D_NVIDIA="on" ;;
     VirtualBox) D_VBOX="on" ;;
     VMware) D_VMWARE="on" ;;
+    QEMU) D_QEMU="on" ;;
+    HyperV) D_HYPERV="on" ;;
     *)
         if [ "$BOOTMETHOD" = "UEFI" ]; then
             D_SCFB="on"
@@ -308,14 +391,16 @@ case $AUTO_GPU in
 esac
 
 gpu=$($DIALOG --title "Video Driver" \
-    --radiolist "Driver video (suggested: $AUTO_GPU):" 14 60 8 \
+    --radiolist "Video driver (suggested: $AUTO_GPU):" 16 60 10 \
     "Intel"      "Intel HD Graphics" ${D_INTEL:-off} \
-    "AMD"        "AMD Radeon moderna" ${D_AMD:-off} \
+    "AMD"        "AMD Radeon (modern)" ${D_AMD:-off} \
     "Radeon"     "AMD legacy" ${D_RADEON:-off} \
     "NVIDIA"     "NVIDIA" ${D_NVIDIA:-off} \
     "VirtualBox" "VirtualBox Guest" ${D_VBOX:-off} \
     "VMware"     "VMware Guest" ${D_VMWARE:-off} \
-    "SCFB"       "Framebuffer UEFI" ${D_SCFB:-off} \
+    "QEMU"       "QEMU/KVM" ${D_QEMU:-off} \
+    "HyperV"     "Hyper-V Guest" ${D_HYPERV:-off} \
+    "SCFB"       "UEFI Framebuffer" ${D_SCFB:-off} \
     "VESA"       "VESA BIOS" ${D_VESA:-off} \
     3>&1 1>&2 2>&3 3>&-)
 
@@ -375,6 +460,35 @@ case $gpu in
         ;;
     VMware)
         GPU_PKGS="xf86-video-vmware open-vm-tools"
+        ;;
+    QEMU)
+        # Detect specific QEMU GPU type
+        if pciconf -lv | grep -q "vendor.*0x1af4.*device.*0x1050"; then
+            # VirtIO-GPU
+            GPU_PKGS="xf86-video-scfb"
+            log "Using SCFB driver for VirtIO-GPU"
+        elif pciconf -lv | grep -qi "qxl"; then
+            # QXL
+            GPU_PKGS="xf86-video-qxl"
+            log "Using QXL driver"
+        elif pciconf -lv | grep -q "vendor.*0x1234"; then
+            # QEMU standard VGA - use SCFB for UEFI or VESA for BIOS
+            if [ "$BOOTMETHOD" = "UEFI" ]; then
+                GPU_PKGS="xf86-video-scfb"
+                log "Using SCFB driver for QEMU standard VGA (UEFI)"
+            else
+                GPU_PKGS="xf86-video-vesa"
+                log "Using VESA driver for QEMU standard VGA (BIOS)"
+            fi
+        else
+            # Fallback to SCFB
+            GPU_PKGS="xf86-video-scfb"
+            log "Using SCFB driver for QEMU (fallback)"
+        fi
+        ;;
+    HyperV)
+        GPU_PKGS="xf86-video-scfb"
+        # Hyper-V uses synthetic video driver (scfb with hyperv_fb)
         ;;
     SCFB)
         GPU_PKGS="xf86-video-scfb"
@@ -641,6 +755,57 @@ if [ "$gpu" = "VirtualBox" ]; then
             log "OK: VirtualBox UEFI poweroff fix"
         fi
     fi
+fi
+
+# --- QEMU GUEST AGENT ---
+if [ "$gpu" = "QEMU" ]; then
+    log "Installing QEMU Guest Agent..."
+    if install_pkg qemu-guest-agent; then
+        sysrc qemu_guest_agent_enable="YES"
+        sysrc qemu_guest_agent_flags="-d"
+        
+        log "Configuring VirtIO modules..."
+        if ! grep -q "virtio_load" /boot/loader.conf 2>/dev/null; then
+            cat >> /boot/loader.conf <<'VIRTIO_MODULES'
+# VirtIO modules for QEMU/KVM
+virtio_load="YES"
+virtio_pci_load="YES"
+virtio_blk_load="YES"
+virtio_scsi_load="YES"
+virtio_balloon_load="YES"
+virtio_random_load="YES"
+virtio_console_load="YES"
+if_vtnet_load="YES"
+VIRTIO_MODULES
+        fi
+        
+        log "OK: QEMU guest agent configured"
+    else
+        log "WARNING: QEMU guest agent installation failed"
+    fi
+fi
+
+# --- HYPER-V INTEGRATION SERVICES ---
+if [ "$gpu" = "HyperV" ]; then
+    log "Configuring Hyper-V Integration Services..."
+    
+    # Load Hyper-V modules
+    if ! grep -q "hyperv_load" /boot/loader.conf 2>/dev/null; then
+        log "Configuring Hyper-V modules..."
+        cat >> /boot/loader.conf <<'HYPERV_MODULES'
+# Hyper-V Integration Services
+hv_vmbus_load="YES"
+hv_utils_load="YES"
+hv_netvsc_load="YES"
+hv_storvsc_load="YES"
+HYPERV_MODULES
+        log "OK: Hyper-V modules configured"
+    fi
+    
+    # Note: hyperv-tools package doesn't exist in FreeBSD yet
+    # Manual configuration needed for advanced features
+    log "OK: Hyper-V basic configuration completed"
+    log "NOTE: For advanced Hyper-V features, manual configuration may be needed"
 fi
 
 # GNOME specifico
@@ -1047,6 +1212,8 @@ $([ "$IS_LAPTOP" = "YES" ] && echo "  - Laptop power management (powerdxx)")
 $([ "$HAS_SSD" = "YES" ] && echo "  - Automatic SSD TRIM")
 $([ "$DE_CHOICE" = "KDE" ] && echo "  - KDE IPC optimizations")
 $([ "$gpu" = "VirtualBox" ] && [ "$BOOTMETHOD" = "UEFI" ] && echo "  - VirtualBox UEFI poweroff fix")
+$([ "$gpu" = "QEMU" ] && echo "  - QEMU Guest Agent configured")
+$([ "$gpu" = "HyperV" ] && echo "  - Hyper-V Integration Services configured")
 $([ "$NEEDS_FCITX5" = "YES" ] && echo "  - Input Method fcitx5 configured")
 
 Localization:
